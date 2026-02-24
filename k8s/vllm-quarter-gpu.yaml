@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-quarter-a
+  namespace: qgpu-demo
+  labels:
+    app: vllm-quarter-a
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-quarter-a
+  template:
+    metadata:
+      labels:
+        app: vllm-quarter-a
+    spec:
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args:
+            - --model
+            - Qwen/Qwen2.5-VL-7B-Instruct
+            - --dtype
+            - auto
+            - --max-model-len
+            - "2048"
+            - --gpu-memory-utilization
+            - "0.90"
+            - --enable-prefix-caching
+            - --enable-chunked-prefill
+            - --port
+            - "8000"
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              tke.cloud.tencent.com/qgpu-core: "25"
+              tke.cloud.tencent.com/qgpu-memory: "12"
+            limits:
+              tke.cloud.tencent.com/qgpu-core: "25"
+              tke.cloud.tencent.com/qgpu-memory: "12"
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              value: ""
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-quarter-a
+  namespace: qgpu-demo
+spec:
+  type: NodePort
+  selector:
+    app: vllm-quarter-a
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30083

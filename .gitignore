@@ -1,0 +1,15 @@
+.DS_Store
+.env
+*.tfvars
+!terraform.tfvars.example
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+results*.csv
+results*.json
+__pycache__/
+*.pyc
+*.pem
+*.pdf
+*-config
