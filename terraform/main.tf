@@ -14,54 +14,15 @@ provider "tencentcloud" {
   secret_key = var.secret_key
 }
 
-# ── Security Group ──
-
-resource "tencentcloud_security_group" "qgpu" {
-  name        = var.security_group_name
-  description = "Security group for qGPU demo TKE cluster"
-}
-
-resource "tencentcloud_security_group_lite_rule" "qgpu" {
-  security_group_id = tencentcloud_security_group.qgpu.id
-
-  ingress = [
-    "ACCEPT#${var.my_ip}#22#TCP",             # SSH from your IP
-    "ACCEPT#${var.my_ip}#6443#TCP",           # kubectl API from your IP
-    "ACCEPT#${var.my_ip}#30000-32767#TCP",    # NodePort services from your IP
-  ]
-
-  egress = [
-    "ACCEPT#0.0.0.0/0#ALL#ALL",
-  ]
-}
-
-# ── TKE Cluster ──
-
-resource "tencentcloud_kubernetes_cluster" "qgpu" {
-  cluster_name                    = var.cluster_name
-  cluster_version                 = var.cluster_version
-  cluster_cidr                    = var.cluster_cidr
-  vpc_id                          = var.vpc_id
-  cluster_max_pod_num             = 64
-  cluster_max_service_num         = 256
-  cluster_deploy_type             = "MANAGED_CLUSTER"
-  cluster_os                      = "ubuntu22.04x86_64"
-  container_runtime               = "containerd"
-  cluster_internet                = true
-  cluster_internet_security_group = tencentcloud_security_group.qgpu.id
-
-  tags = var.tags
-}
-
-# ── GPU Node Pool ──
+# ── GPU Node Pool (against existing TKE cluster) ──
 
 resource "tencentcloud_kubernetes_node_pool" "gpu" {
-  cluster_id          = tencentcloud_kubernetes_cluster.qgpu.id
+  cluster_id          = var.cluster_id
   name                = "gpu-pool"
-  node_os             = "ubuntu22.04x86_64"
-  max_size            = var.max_node_count
-  min_size            = var.min_node_count
-  desired_capacity    = var.desired_node_count
+  node_os             = "tlinux3.1x86_64"
+  max_size            = 1
+  min_size            = 1
+  desired_capacity    = 1
   vpc_id              = var.vpc_id
   subnet_ids          = [var.subnet_id]
   retry_policy        = "INCREMENTAL_INTERVALS"
@@ -70,22 +31,33 @@ resource "tencentcloud_kubernetes_node_pool" "gpu" {
   auto_scaling_config {
     instance_type              = var.instance_type
     key_ids                    = [var.key_id]
-    security_group_ids         = [tencentcloud_security_group.qgpu.id]
-    system_disk_type           = "CLOUD_SSD"
+    orderly_security_group_ids = [var.security_group_id]
+    system_disk_type           = "CLOUD_BSSD"
     system_disk_size           = 100
     internet_charge_type       = "TRAFFIC_POSTPAID_BY_HOUR"
-    internet_max_bandwidth_out = var.bandwidth
+    internet_max_bandwidth_out = 100
     public_ip_assigned         = true
 
     data_disk {
-      disk_type = "CLOUD_SSD"
+      disk_type = "CLOUD_BSSD"
       disk_size = 200
     }
   }
 
+  node_config {
+    data_disk {
+      disk_type             = "CLOUD_BSSD"
+      disk_size             = 200
+      mount_target          = "/var/lib/containerd"
+      auto_format_and_mount = true
+      file_system           = "ext4"
+    }
+
+    docker_graph_path = "/var/lib/containerd"
+  }
+
   labels = {
-    "gpu-type" = "l20"
-    "qgpu"     = "enabled"
+    "qgpu-device-enable" = "enable"
   }
 
   taints {
@@ -93,21 +65,4 @@ resource "tencentcloud_kubernetes_node_pool" "gpu" {
     value  = "present"
     effect = "NoSchedule"
   }
-
-  tags = var.tags
-}
-
-# ── gpu-manager addon for qGPU ──
-
-resource "tencentcloud_kubernetes_addon_attachment" "gpu_manager" {
-  cluster_id = tencentcloud_kubernetes_cluster.qgpu.id
-  name       = "gpu-manager"
-
-  values = [
-    jsonencode({
-      "global" = {
-        "cluster_id" = tencentcloud_kubernetes_cluster.qgpu.id
-      }
-    })
-  ]
 }

@@ -1,18 +1,70 @@
-# qGPU Demo — TKE Cluster with GPU Sharing
+# qGPU Demo — GPU Sharing on TKE
 
-Run multiple vLLM instances on a single NVIDIA L20 GPU using Tencent Cloud's qGPU technology.
+Run two different LLMs simultaneously on a single NVIDIA L20 GPU using Tencent Cloud's qGPU technology.
 
 ## Architecture
 
 ```
 TKE Cluster (Managed K8s)
-└── GPU Node Pool (PNV5b.8XLARGE96 × 1 node)
+└── Native GPU Node Pool (PNV5b.8XLARGE96 × 1 node, 1× L20 48GB)
     └── qGPU enabled (gpu-manager addon)
-        ├── Pod A: vLLM (50% GPU, 24GB) → :30081
-        └── Pod B: vLLM (50% GPU, 24GB) → :30082
+        ├── Pod A: vLLM + Qwen2.5-0.5B  (50% compute, 22GB VRAM) → :30081
+        └── Pod B: vLLM + Qwen2.5-1.5B  (50% compute, 22GB VRAM) → :30082
 ```
 
-## Console Setup (Step-by-Step)
+## Demo Results
+
+Two models serving inference concurrently on one GPU:
+
+```
+--- 20 concurrent requests (10 per model) ---
+
+  [Qwen2.5-0.5B] 10 requests, 668 tokens, 551.6 tok/s
+  [Qwen2.5-1.5B] 10 requests, 364 tokens, 300.5 tok/s
+
+  Total wall time: 1.21s
+  Total requests:  20
+  Total tokens:    1032
+```
+
+## Quick Start
+
+### 1. Test the endpoints
+
+```bash
+curl http://<NODE_IP>:30081/v1/models   # Qwen2.5-0.5B
+curl http://<NODE_IP>:30082/v1/models   # Qwen2.5-1.5B
+```
+
+### 2. Run the concurrent test
+
+```bash
+python3 test_qgpu.py
+```
+
+### 3. Chat with either model
+
+```bash
+curl http://<NODE_IP>:30081/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"Qwen/Qwen2.5-0.5B-Instruct",
+       "messages":[{"role":"user","content":"What is qGPU?"}],
+       "max_tokens":100}'
+```
+
+## qGPU Resource Syntax
+
+```yaml
+resources:
+  requests:
+    tke.cloud.tencent.com/qgpu-core: 50      # 50% compute (0–100)
+    tke.cloud.tencent.com/qgpu-memory: 22     # 22GB VRAM
+  limits:
+    tke.cloud.tencent.com/qgpu-core: 50
+    tke.cloud.tencent.com/qgpu-memory: 22
+```
+
+## Console Setup
 
 ### Step 1 — Create TKE Cluster
 
@@ -33,14 +85,14 @@ Network configuration:
 | Container network add-on | **VPC-CNI** (recommended) |
 | Network mode | Shared ENI with multiple IPs |
 | Static Pod IP | unchecked |
-| Container subnet | select your subnet in Tokyo |
+| Container subnet | select your subnet |
 | Service IP Range | `192.168.0.0/17` (default) |
 
 Component configuration:
 - Keep defaults (CBS, monitoragent, ip-masq-agent)
-- **Skip QGPU addon** for now — it must be installed after cluster creation
+- **Skip QGPU addon** — must be installed after cluster creation
 
-Click Create. Wait ~5-10 minutes for the control plane to be ready.
+Click Create. Wait ~5-10 minutes.
 
 ### Step 2 — Install qGPU Addon
 
@@ -57,83 +109,97 @@ Left sidebar → **Node Management** → **Node Pool** → **Create**
 
 | Setting | Value |
 |---------|-------|
-| Node pool type | Native node pool |
+| Node pool type | **Native node pool** (required for qGPU) |
 | Billing mode | Pay-as-you-go |
-| Availability zone | Tokyo Zone 1 or 2 (must match your subnet) |
-| Instance family | **GPU-based** → **GPU Computing PNV5b** |
+| Availability zone | must match your subnet |
 | Instance type | **PNV5b.8XLARGE96** (32-core, 96GB, 1× L20 48GB, ~$2.67/hr) |
 | GPU driver | default (e.g. 570.x, CUDA 12.8) |
-| System disk | Enhanced SSD, 100 GB |
-| Data disk | Enhanced SSD, 200 GB, ext4, mount at `/var/lib/container` |
-| Auto scaling | Activate, node range **1–1** (or 1–2) |
-| qGPU sharing | enable if available (may require addon to be installed first) |
+| System disk | Enhanced SSD, **100 GB** |
+| Data disk | Enhanced SSD, **200 GB**, ext4, mount at **`/var/lib/containerd`** |
+| Auto scaling | node range **1–1** |
 
-Click Create node pool. Wait ~5 minutes for the GPU node to join.
+Wait ~5 minutes for the GPU node to join.
 
-### Step 4 — Enable Public API Access (kubectl)
+### Step 4 — Label Node for qGPU
 
-Left sidebar → **Basic Information** → **API Server Information** tab
+The qGPU manager DaemonSet requires a label to schedule onto the node:
 
-1. Toggle **Via internet** to **Enabled**
-2. Configure the CLB:
-   - Security group: default (ensure port 443 is open for your IP)
-   - Load Balancer: Automatic creation
-   - Bandwidth: 10 Mbps
-   - By traffic usage
-3. Wait ~1 minute for CLB to be created
-
-### Step 5 — Download Kubeconfig
-
-On the same **API Server Information** page, scroll down to **Connect to a Kubernetes Cluster via kubectl**:
-
-1. Download the kubeconfig file
-2. Configure locally:
 ```bash
-export KUBECONFIG=$HOME/Downloads/cls-xxxxxxxx-config
-kubectl config get-contexts
-kubectl config use-context cls-xxxxxxxx-XXXXXXXXXXXX-context-default
-kubectl get nodes
+kubectl label node <NODE_NAME> qgpu-device-enable=enable
 ```
 
-### Step 6 — Verify qGPU Resources
-
+Verify qGPU resources appear:
 ```bash
 kubectl describe node <NODE_NAME> | grep -A5 "Allocatable"
 ```
 
 Look for:
 ```
-tke.cloud.tencent.com/qgpu-core: 100
-tke.cloud.tencent.com/qgpu-memory: 48
+tke.cloud.tencent.com/qgpu-core:    100
+tke.cloud.tencent.com/qgpu-memory:  44
 ```
 
-### Step 7 — Deploy vLLM Pods
+### Step 5 — Enable kubectl Access
+
+**Option A — Public endpoint (console)**
+
+Left sidebar → **Basic Information** → **API Server Information**:
+1. Toggle **Via internet** → **Enabled**
+2. Add your IP to the security group for port 443
+3. Download kubeconfig from the same page
+
+```bash
+export KUBECONFIG=$HOME/Downloads/cls-xxxxxxxx-config
+kubectl get nodes
+```
+
+**Option B — SSH tunnel to private endpoint**
+
+If the public CLB has issues, tunnel through the GPU node:
+```bash
+ssh -L 16443:<PRIVATE_ENDPOINT>:443 -fN root@<NODE_EXTERNAL_IP>
+```
+
+Edit kubeconfig to point `server:` at `https://127.0.0.1:16443`, then:
+```bash
+kubectl --insecure-skip-tls-verify get nodes
+```
+
+### Step 6 — Deploy vLLM Pods
 
 ```bash
 kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/vllm-half-gpu.yaml    # 2 pods sharing GPU (50% each)
+kubectl apply -f k8s/vllm-half-gpu.yaml
 ```
 
-Watch pods start:
+Wait ~5-7 minutes for vLLM to pull the image, load models, and compile CUDA graphs:
 ```bash
 kubectl get pods -n qgpu-demo -w
-kubectl logs -n qgpu-demo deploy/vllm-half-a -f
+```
+
+### Step 7 — Verify GPU Sharing
+
+Check that both pods are running and the GPU is fully allocated:
+
+```bash
+kubectl describe node <NODE_NAME> | grep -A5 "Allocated resources"
+```
+
+Expected output:
+```
+tke.cloud.tencent.com/qgpu-core    100   100
+tke.cloud.tencent.com/qgpu-memory  44    44
 ```
 
 ### Step 8 — Test
 
 ```bash
-NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}')
-curl http://$NODE_IP:30081/v1/models
-curl http://$NODE_IP:30082/v1/models
-```
+# Quick test
+curl http://<NODE_IP>:30081/v1/models
+curl http://<NODE_IP>:30082/v1/models
 
-### Step 9 — Benchmark
-
-```bash
-python3 benchmark.py --base-url http://$NODE_IP:30081/v1 --label half-a --save
-python3 benchmark.py --base-url http://$NODE_IP:30082/v1 --label half-b --save
-python3 benchmark.py --compare results-half-a-*.csv results-half-b-*.csv
+# Concurrent test
+python3 test_qgpu.py
 ```
 
 ### Cleanup
@@ -141,65 +207,28 @@ python3 benchmark.py --compare results-half-a-*.csv results-half-b-*.csv
 Go to https://console.tencentcloud.com/tke2/cluster → select `qgpu-demo` → **Delete**.
 Check "delete nodes" to stop GPU billing.
 
----
+## Important Notes
 
-## Quick Start (Terraform)
-
-### 1. Provision the cluster
-
-```bash
-cd terraform
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your credentials, VPC/subnet IDs, SSH key, IP
-terraform init && terraform apply
-```
-
-### 2. Deploy vLLM pods
-
-```bash
-cp .env.example .env
-# Edit .env with cluster ID from terraform output
-./deploy.sh half      # 2 pods sharing GPU (50% each)
-./deploy.sh full      # 1 pod with full GPU (baseline)
-./deploy.sh quarter   # 1 pod with 25% GPU
-```
-
-### 3. Benchmark
-
-```bash
-python3 benchmark.py --base-url http://<NODE_IP>:30081/v1 --label half-a --save
-python3 benchmark.py --base-url http://<NODE_IP>:30080/v1 --label full --save
-python3 benchmark.py --compare results-full-*.csv results-half-a-*.csv
-```
-
-## qGPU Resource Syntax
-
-```yaml
-resources:
-  requests:
-    tke.cloud.tencent.com/qgpu-core: 50      # 50% compute
-    tke.cloud.tencent.com/qgpu-memory: 24     # 24GB VRAM
-  limits:
-    tke.cloud.tencent.com/qgpu-core: 50
-    tke.cloud.tencent.com/qgpu-memory: 24
-```
-
-## Deployment Modes
-
-| Mode | Pods | GPU per pod | NodePorts |
-|------|------|-------------|-----------|
-| `full` | 1 | 100% core, 46GB | 30080 |
-| `half` | 2 | 50% core, 24GB | 30081, 30082 |
-| `quarter` | 1 | 25% core, 12GB | 30083 |
+- qGPU **requires native node pools** — regular (ASG-based) node pools won't work
+- qGPU addon cannot be installed during cluster creation — install it after
+- Node must have label `qgpu-device-enable=enable` for qGPU manager to run
+- L20 48GB reports **44GB allocatable** through qGPU
+- Data disk must mount at **`/var/lib/containerd`** (not `/var/lib/container`) — the vLLM image is ~9GB
+- System disk should be **100GB+** to avoid disk-pressure taints
+- vLLM needs **300s+ probe delays** for initial CUDA graph compilation
+- `nvidia-smi` doesn't work inside qGPU pods — use `env | grep QGPU` to verify allocation
+- The Terraform provider does not support native node pools — use the console
 
 ## Files
 
 ```
-├── terraform/          Cluster + GPU node pool IaC
-├── k8s/                Kubernetes manifests (namespace, deployments, services)
-├── setup.sh            Cluster bootstrap (kubeconfig, namespace, pods)
-├── deploy.sh           Entry point — sources .env, runs setup
-├── benchmark.py        Performance benchmark with comparison mode
-├── .env.example        Config template
+├── k8s/
+│   ├── namespace.yaml          qgpu-demo namespace
+│   └── vllm-half-gpu.yaml      2 vLLM pods splitting GPU 50/50
+├── terraform/                  Node pool IaC (regular pools only)
+├── test_qgpu.py                Concurrent inference test script
+├── setup.sh                    Cluster bootstrap script
+├── deploy.sh                   Entry point (sources .env)
+├── .env.example                Config template
 └── .gitignore
 ```

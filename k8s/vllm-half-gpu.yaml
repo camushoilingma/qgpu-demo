@@ -24,15 +24,13 @@ spec:
           image: vllm/vllm-openai:latest
           args:
             - --model
-            - Qwen/Qwen2.5-1.5B-Instruct
+            - Qwen/Qwen2.5-0.5B-Instruct
             - --dtype
             - auto
             - --max-model-len
-            - "4096"
+            - "2048"
             - --gpu-memory-utilization
             - "0.90"
-            - --enable-prefix-caching
-            - --enable-chunked-prefill
             - --port
             - "8000"
           ports:
@@ -51,13 +49,13 @@ spec:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 120
+            initialDelaySeconds: 300
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 120
+            initialDelaySeconds: 300
             periodSeconds: 30
 ---
 apiVersion: apps/v1
@@ -90,11 +88,9 @@ spec:
             - --dtype
             - auto
             - --max-model-len
-            - "4096"
+            - "2048"
             - --gpu-memory-utilization
             - "0.90"
-            - --enable-prefix-caching
-            - --enable-chunked-prefill
             - --port
             - "8000"
           ports:
@@ -113,13 +109,13 @@ spec:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 120
+            initialDelaySeconds: 300
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 120
+            initialDelaySeconds: 300
             periodSeconds: 30
 ---
 apiVersion: v1
