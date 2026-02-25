@@ -29,23 +29,90 @@ Two models serving inference concurrently on one GPU:
 
 ## Quick Start
 
+### Prerequisites — Populate Variables
+
+Before running tests, you need to set the following variables:
+
+#### 1. Get Node IP Address
+
+Find the external IP of your GPU node:
+
+```bash
+# Option A: From kubectl
+kubectl get nodes -o wide
+
+# Option B: From console
+# Go to: Node Management → Node Pool → click your node → view External IP
+```
+
+Set the environment variable:
+
+```bash
+export NODE_IP="<YOUR_NODE_EXTERNAL_IP>"
+# Example: export NODE_IP="43.133.213.141"
+```
+
+#### 2. Get Node Name (for kubectl commands)
+
+```bash
+# List all nodes
+kubectl get nodes
+
+# The NAME column shows the node name
+# Example: cls-ky8jr2yc-node-xxxxx
+```
+
+#### 3. Get Cluster Endpoint (for SSH tunnel)
+
+If using Option B in Step 5 (SSH tunnel):
+- **Private endpoint**: Found in console → Basic Information → API Server Information → Private endpoint
+- **Node external IP**: Same as NODE_IP above
+
+#### 4. Terraform Variables (if using Terraform)
+
+Copy the example file and fill in your values:
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Edit `terraform.tfvars` with:
+
+- **Credentials**: Get from https://console.tencentcloud.com/cam/capi
+  - `secret_id`: Your Tencent Cloud API Secret ID
+  - `secret_key`: Your Tencent Cloud API Secret Key
+
+- **Network IDs**: Get from https://console.tencentcloud.com/vpc
+  - `vpc_id`: Your VPC ID (e.g., `vpc-xxxxxxxx`)
+  - `subnet_id`: Your subnet ID (e.g., `subnet-xxxxxxxx`)
+  - `security_group_id`: Your security group ID (e.g., `sg-xxxxxxxx`)
+
+- **Cluster ID**: Get from console → TKE → your cluster → Basic Information
+  - `cluster_id`: Your TKE cluster ID (e.g., `cls-xxxxxxxx`)
+
+- **SSH Key**: Get from https://console.tencentcloud.com/cvm/sshkey
+  - `key_id`: Your SSH key pair ID (e.g., `skey-xxxxxxxx`)
+
 ### 1. Test the endpoints
 
 ```bash
-curl http://<NODE_IP>:30081/v1/models   # Qwen2.5-0.5B
-curl http://<NODE_IP>:30082/v1/models   # Qwen2.5-1.5B
+curl http://${NODE_IP}:30081/v1/models   # Qwen2.5-0.5B
+curl http://${NODE_IP}:30082/v1/models   # Qwen2.5-1.5B
 ```
 
 ### 2. Run the concurrent test
 
 ```bash
+# Make sure NODE_IP is set
+export NODE_IP="<YOUR_NODE_EXTERNAL_IP>"
 python3 test_qgpu.py
 ```
 
 ### 3. Chat with either model
 
 ```bash
-curl http://<NODE_IP>:30081/v1/chat/completions \
+curl http://${NODE_IP}:30081/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"Qwen/Qwen2.5-0.5B-Instruct",
        "messages":[{"role":"user","content":"What is qGPU?"}],
@@ -124,8 +191,16 @@ Wait ~5 minutes for the GPU node to join.
 
 The qGPU manager DaemonSet requires a label to schedule onto the node:
 
+First, get your node name:
+```bash
+kubectl get nodes
+# Copy the NAME from the output (e.g., cls-ky8jr2yc-node-xxxxx)
+```
+
+Then label the node:
 ```bash
 kubectl label node <NODE_NAME> qgpu-device-enable=enable
+# Replace <NODE_NAME> with the actual node name from above
 ```
 
 Verify qGPU resources appear:
@@ -149,6 +224,8 @@ Left sidebar → **Basic Information** → **API Server Information**:
 3. Download kubeconfig from the same page
 
 ```bash
+# Replace cls-xxxxxxxx-config with your actual downloaded kubeconfig filename
+# The filename format is: cls-<CLUSTER_ID>-config
 export KUBECONFIG=$HOME/Downloads/cls-xxxxxxxx-config
 kubectl get nodes
 ```
@@ -156,7 +233,13 @@ kubectl get nodes
 **Option B — SSH tunnel to private endpoint**
 
 If the public CLB has issues, tunnel through the GPU node:
+
+1. Get the private endpoint from console → Basic Information → API Server Information → Private endpoint
+2. Get the node external IP (same as NODE_IP from Quick Start prerequisites)
+
 ```bash
+# Replace <PRIVATE_ENDPOINT> with the private endpoint (e.g., cls-xxxxx.ccs.tencent-cloud.com:443)
+# Replace <NODE_EXTERNAL_IP> with your node's external IP
 ssh -L 16443:<PRIVATE_ENDPOINT>:443 -fN root@<NODE_EXTERNAL_IP>
 ```
 
@@ -182,6 +265,7 @@ kubectl get pods -n qgpu-demo -w
 Check that both pods are running and the GPU is fully allocated:
 
 ```bash
+# Replace <NODE_NAME> with your actual node name (from Step 4)
 kubectl describe node <NODE_NAME> | grep -A5 "Allocated resources"
 ```
 
@@ -193,10 +277,17 @@ tke.cloud.tencent.com/qgpu-memory  44    44
 
 ### Step 8 — Test
 
+Set the NODE_IP environment variable first (see Quick Start → Prerequisites):
+
+```bash
+export NODE_IP="<YOUR_NODE_EXTERNAL_IP>"
+```
+
+Then run tests:
 ```bash
 # Quick test
-curl http://<NODE_IP>:30081/v1/models
-curl http://<NODE_IP>:30082/v1/models
+curl http://${NODE_IP}:30081/v1/models
+curl http://${NODE_IP}:30082/v1/models
 
 # Concurrent test
 python3 test_qgpu.py
