@@ -8,6 +8,8 @@
 .terraform.lock.hcl
 results*.csv
 results*.json
+router_test_*.csv
+test_results_*
 __pycache__/
 *.pyc
 *.pem

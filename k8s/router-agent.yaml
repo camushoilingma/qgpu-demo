@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: router-agent
+  namespace: qgpu-demo
+  labels:
+    app: router-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: router-agent
+  template:
+    metadata:
+      labels:
+        app: router-agent
+    spec:
+      containers:
+        - name: router
+          image: python:3.11-slim
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              pip install fastapi uvicorn aiohttp pydantic -q
+              python /app/router_service.py
+          workingDir: /app
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: PORT
+              value: "8000"
+            - name: ROUTER_MODEL_URL
+              value: "http://vllm-half-a:8000/v1/chat/completions"
+            - name: SIMPLE_AGENT_URL
+              value: "http://vllm-half-a:8000/v1/chat/completions"
+            - name: SPECIALIST_AGENT_URL
+              value: "http://vllm-half-b:8000/v1/chat/completions"
+            - name: ROUTER_MODEL
+              value: "Qwen/Qwen2.5-0.5B-Instruct"
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gemini-api-key  # Change this to your secret name
+                  key: api-key          # Change this to your secret key name
+                  optional: true
+            - name: GEMINI_SECRET_NAME
+              value: "gemini-api-key"    # Override via: kubectl set env deployment/router-agent GEMINI_SECRET_NAME=your-secret-name -n qgpu-demo
+            - name: GEMINI_SECRET_KEY
+              value: "api-key"          # Override via: kubectl set env deployment/router-agent GEMINI_SECRET_KEY=your-key-name -n qgpu-demo
+          volumeMounts:
+            - name: router-code
+              mountPath: /app
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: router-code
+          configMap:
+            name: router-agent-code
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: router-agent-code
+  namespace: qgpu-demo
+data:
+  router_service.py: |
+    # Router service code will be injected here
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: router-agent
+  namespace: qgpu-demo
+  labels:
+    app: router-agent
+spec:
+  type: NodePort
+  selector:
+    app: router-agent
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30090
+      protocol: TCP
+      name: http
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gemini-api-key
+  namespace: qgpu-demo
+type: Opaque
+stringData:
+  api-key: ""  # Set this via: kubectl create secret generic gemini-api-key --from-literal=api-key=YOUR_KEY -n qgpu-demo
